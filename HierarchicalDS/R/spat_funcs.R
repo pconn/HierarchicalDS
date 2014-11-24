@@ -30,7 +30,7 @@ switch_sample<-function(n,pdf,cur.par,RE){
 #' @keywords probability density
 #' @author Paul B. Conn
 switch_sample_prior<-function(pdf,cur.par){
-  require(mc2d)
+  #require(mc2d)
   switch(pdf,
          pois1=rgamma(1,cur.par[1],cur.par[2]),
          poisson=rgamma(1,cur.par[1],cur.par[2]),
@@ -694,7 +694,7 @@ summary_N<-function(Out){
 #' })
 probit.fct=function(x,formula,beta,rho,...)
 {
-  require(mvtnorm)
+  #require(mvtnorm)
   #  Create dataframe and apply formula to get design matrix
   dat=expand.grid(distance=x,observer=1:2,...)
   xmat=model.matrix(formula,dat)
@@ -748,7 +748,7 @@ probit.fct=function(x,formula,beta,rho,...)
 #' @keywords MCMC, coda
 #' @author Paul B. Conn
 convert.HDS.to.mcmc<-function(MCMC,N.hab.pois.par,N.hab.bern.par,Cov.par.n,Hab.pois.names,Hab.bern.names,Det.names,Cov.names,MisID.names,N.par.misID=NULL,misID.mat=NULL,fix.tau.nu=FALSE,misID=TRUE,spat.ind=TRUE,point.ind=TRUE){
-  require(coda)
+  #require(coda)
   if(misID==TRUE & (is.null(N.par.misID)|is.null(misID.mat)))cat("\n Error: must provide N.par.misID and misID.mat whenever misID=TRUE \n")
   i.ZIP=!is.na(N.hab.bern.par)[1]
   n.species=nrow(MCMC$Hab.pois)
@@ -835,7 +835,7 @@ convert.HDS.to.mcmc<-function(MCMC,N.hab.pois.par,N.hab.bern.par,Cov.par.n,Hab.p
 #' @keywords MCMC, table
 #' @author Paul B. Conn
 table.mcmc<-function(MCMC,file=NULL,type="csv",a=0.05){
-  require(xtable)
+  #require(xtable)
   Out.tab=data.frame(matrix(0,ncol(MCMC),5))
   colnames(Out.tab)=c("Parameter","Mean","Median","Lower","Upper")
   MCMC=as.matrix(MCMC)
@@ -888,6 +888,26 @@ post_loss<-function(Out,burnin=0){
   Loss
 }
 
+plot_N_map<-function(cur.t,N,Grid,highlight=NULL){
+  #require(rgeos)
+  Tmp=Grid[[1]]
+  if(is.null(highlight)==FALSE){
+    midpoints=data.frame(gCentroid(Tmp[highlight,],byid=TRUE))
+    colnames(midpoints)=c("Easting","Northing")
+  }
+  Abundance=N[,cur.t]
+  Cur.df=cbind(data.frame(gCentroid(Tmp,byid=TRUE)),Abundance)
+  new.colnames=colnames(Cur.df)
+  new.colnames[1:2]=c("Easting","Northing")
+  colnames(Cur.df)=new.colnames
+  p1=ggplot(Cur.df)+aes(x=Easting,y=Northing,fill=Abundance)+geom_raster()+tmp.theme
+  tmp.theme=theme(axis.ticks = element_blank(), axis.text = element_blank())
+  if(is.null(highlight)==FALSE){
+    #p1=p1+geom_rect(data=midpoints,size=0.5,fill=NA,colour="yellow",aes(xmin=Easting-25067,xmax=Easting,ymin=Northing,ymax=Northing+25067))
+    p1=p1+geom_rect(data=midpoints,size=0.5,fill=NA,colour="yellow",aes(xmin=Easting-25067/2,xmax=Easting+25067/2,ymin=Northing-25067/2,ymax=Northing+25067/2))
+  }
+  p1
+}
 
 #' MCMC output from running example in Hierarchical DS 
 #' 

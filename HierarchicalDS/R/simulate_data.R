@@ -11,7 +11,7 @@
 #' @author Paul B. Conn
 simulate_data<-function(S,Observers,ZIP=TRUE,misID=TRUE,tau.pois=15,tau.bern=20){
   #note: currently hardwired for 2 species
-	require(mvtnorm)
+	#require(mvtnorm)
 	#set.seed(122412)
 	
   if((sqrt(S)%%1)!=0)cat("Error: S must be a square #")

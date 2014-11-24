@@ -22,18 +22,17 @@ Description: Functions for performing hierarchical analysis of distance
     from double observers.  New in version 2.1 is the ability to
     include zero inflation, but this is only recommended for cases where
     sample sizes and spatial coverage of the survey are high.
-Version: 2.092
-Depends:
+Version: 2.093
+Imports:
     truncnorm,
-    MASS,
     mvtnorm,
     Matrix,
     coda,
-    spsurvey,
-    MCMCpack,
     xtable,
-    mc2d
-Date: 2013-7-15
+    mc2d,
+    ggplot2,
+    rgeos
+Date: 2014-11-24
 Collate:
     'hierarchical_DS.R'
     'mcmc_ds.R'

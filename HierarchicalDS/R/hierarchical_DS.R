@@ -96,11 +96,11 @@
 #' @author Paul B. Conn \email{paul.conn@@noaa.gov} 
 #' @examples print("example analysis included in the script example_analysis.R")
 hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.length,Hab.cov,Obs.cov,Hab.pois.formula,Hab.bern.formula=NULL,Det.formula,detect=TRUE,Cov.prior.pdf,Cov.prior.parms,Cov.prior.fixed,Cov.prior.n,n.obs.cov=0,pol.eff=c(1:2),ZIP=FALSE,point.ind=TRUE,spat.ind=FALSE,last.ind=FALSE,cor.const=FALSE,fix.tau.nu=FALSE,srr=TRUE,srr.tol=0.5,misID=FALSE,misID.models=NULL,misID.mat=NULL,misID.symm=TRUE,Inits=NULL,grps=FALSE,M,Control,adapt=TRUE,Prior.pars,post.loss=TRUE){
-	require(mvtnorm)
-	require(Matrix)
-	require(truncnorm)
-	require(mc2d)
-	require(MCMCpack)
+	#require(mvtnorm)
+	#require(Matrix)
+	#require(truncnorm)
+	#require(mc2d)
+	#require(MCMCpack)
 	DEBUG=FALSE
 	
 	Adj=as.matrix(Adj)  #just in case the adjacency matrix = 1 (for 1 transect)
