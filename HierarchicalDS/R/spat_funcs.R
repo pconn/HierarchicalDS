@@ -1,3 +1,5 @@
+if(getRversion() >= "2.15.1")  utils::globalVariables(c("Easting", "Northing"))
+
 #' function to sample from a specified probability density function
 #' @param n number of samples desired
 #' @param pdf probability density function (pois1, poisson, normal, unif.disc, unif.cont)
@@ -16,7 +18,8 @@ switch_sample<-function(n,pdf,cur.par,RE){
          normal=rnorm(n,cur.par[1],cur.par[2]),
          unif.disc=sample(cur.par[1]:cur.par[2],n,replace=TRUE),
          unif.cont=runif(n,cur.par[1],cur.par[2]),
-         multinom=sample(c(1:length(cur.par)),n,replace=TRUE,prob=cur.par)
+         multinom=sample(c(1:length(cur.par)),n,replace=TRUE,prob=cur.par),
+         binary=sample(c(0,1),n,replace=TRUE,prob=cur.par)
   )
 }
 
@@ -36,7 +39,8 @@ switch_sample_prior<-function(pdf,cur.par){
          poisson=rgamma(1,cur.par[1],cur.par[2]),
          pois1_ln=c(rnorm(1,cur.par[1],cur.par[2]),0.05),
          poisson_ln=c(rnorm(1,cur.par[1],cur.par[2]),0.05),
-         multinom=rdirichlet(1,cur.par)
+         multinom=rdirichlet(1,cur.par),
+         binary=rdirichlet(1,cur.par)
   )
 }
 
@@ -145,6 +149,104 @@ get_mod_matrix<-function(Cur.dat,stacked.names,factor.ind,Det.formula,Levels){
   DM
 }
 
+#' function to produce a detection design matrix given a dataset and user-specified formula object
+#' this function is specifically for movement + measurement error models and only for discrete distance bins
+#' @param Cur.dat 	current dataset
+#' @param stacked.names	column names for current dataset
+#' @param factor.ind	a list of indicator variables (1 = factor/categorical variable, 0 = continuous variable)
+#' @param Det.formula	a formula object
+#' @param Levels	A list object giving the number of levels for factor variables
+#' @param Obs.bins   Which of bins are observable
+#' @param n.bins  Total number of bins
+#' @return a design matrix
+#' @export
+#' @keywords model matrix
+#' @author Paul B. Conn
+get_mod_matrix_det_move<-function(Cur.dat,stacked.names,factor.ind,Det.formula,Levels,Obs.bins,n.bins){
+  Cur.dat=as.data.frame(Cur.dat)
+  colnames(Cur.dat)=stacked.names
+  factor.cols=which(factor.ind[stacked.names]==TRUE)
+  if(length(factor.cols)>0){
+    for(icol in 1:length(factor.cols)){
+      Cur.dat[,factor.cols[icol]]=eval(parse(text=paste('factor(Cur.dat[,factor.cols[icol]],levels=Levels$',names(factor.cols)[icol],')',sep='')))
+    }
+  }
+  #change distance into a factor with levels according to Obs.bins - include a final distance category for individuals not perceived to be in strip
+  next.bin=max(Obs.bins)+1
+  Cur.dat[which(!(Cur.dat[,"Distance"]%in%Obs.bins)),"Distance"]=next.bin
+  Cur.dat[,"Distance"]=factor(Cur.dat[,"Distance"],levels=c(Obs.bins,next.bin))
+  DM=model.matrix(Det.formula,data=Cur.dat)
+  DM
+}
+
+#' function to produce a design matrix given a dataset and user-specified formula object
+#' @param Cur.dat 	current dataset
+#' @param stacked.names	column names for current dataset
+#' @param factor.ind	a list of indicator variables (1 = factor/categorical variable, 0 = continuous variable)
+#' @param move.formula	a formula object
+#' @param Levels	A list object giving the number of levels for factor variables
+#' @return a design matrix
+#' @export
+#' @keywords model matrix
+#' @author Paul B. Conn
+get_mod_matrix_move<-function(Cur.dat,stacked.names,factor.ind,move.formula,Levels){
+  Cur.dat=as.data.frame(Cur.dat)
+  colnames(Cur.dat)=stacked.names
+  factor.cols=which(factor.ind[stacked.names]==TRUE)
+  if(length(factor.cols)>0){
+    for(icol in 1:length(factor.cols)){
+      Cur.dat[,factor.cols[icol]]=eval(parse(text=paste('factor(Cur.dat[,factor.cols[icol]],levels=Levels$',names(factor.cols)[icol],')',sep='')))
+    }
+  }
+  DM=model.matrix(move.formula,data=Cur.dat)
+  DM
+}
+
+#' function to sample distance bin when true distance is subject to movement (or measurement error)
+#' @param Par A vector holding parameters for each distance entry (can all be the same)
+#' @param Dist.true  A vector of true/initial distancesgiven a pdf, parameters, and "true" location
+#' @param n.bins Number of distance bins
+#' @param move.family Which pdf to use for movement (currently: 'gaussian' or 'laplace')
+#' @param move.one.side If TRUE, can't move towards the center line
+#' @return A vector of random distance bins
+#' @export
+#' @author Paul B. Conn
+sample_movement<-function(Par,Dist.true,n.bins,move.family,move.one.side=FALSE){
+  Dist.mat = abs(t(matrix(c(1:n.bins),n.bins,length(Dist.true)))-Dist.true) #generic 
+  if(move.family=="gaussian"){
+    Probs=dnorm(Dist.mat,0,1/sqrt(Par))
+  }
+  if(move.family=="laplace"){
+    Probs=dexp(Dist.mat,rate=Par)
+  }
+  if(move.one.side){
+    for(ibin in 2:n.bins)Probs[which(Dist.true==ibin),1:(ibin-1)]=0
+  }
+  Sampled=rep(0,length(Dist.true))
+  Bin.vec=c(1:n.bins)
+  for(i in 1:length(Dist.true))Sampled[i]=sample(Bin.vec,1,prob=Probs[i,])  #could probably be sped up with an apply
+  Sampled
+}
+
+#' function to compute log likelihood for movement/measurement error given two vectors of matched distance bins
+#' @param Par A vector holding parameters for each distance entry (can all be the same)
+#' @param Dist.true  A vector of true/initial distances
+#' @param Dist.obs  A vector of observed distances (or true distance following movement)
+#' @param move.family Which pdf to use for movement (currently: 'gaussian' or 'laplace')
+#' @return A vector of log likelihood values
+#' @export
+#' @author Paul B. Conn
+log_lik_movement<-function(Par,Dist.true,Dist.obs,move.family){
+  if(move.family=="gaussian"){
+    LogL=dnorm(Dist.obs-Dist.true,mean=0,sd=1/sqrt(Par),log=TRUE)
+  }
+  if(move.family=="laplace"){
+    LogL=dexp(abs(Dist.obs-Dist.true),rate=Par,log=TRUE)
+  }
+  LogL
+}
+
+
 #' generate initial values for MCMC chain if not already specified by user
 #' @param DM.hab 	design matrix for habitat model
 #' @param DM.det	design matrix for detection model
@@ -204,6 +306,7 @@ generate_inits_misID<-function(DM.hab.pois,DM.hab.bern,DM.det,N.hab.pois.par,N.h
       for(itmp in 1:length(diag.mods))MisID[[diag.mods[itmp]]][1]=MisID[[diag.mods[itmp]]][1]+2 #ensure that the highest probability is for a non-misID
     }
   }
+  else MisID=NULL
   hab.pois=matrix(0,n.species,max(N.hab.pois.par))
   hab.bern=NULL
   tau.eta.bern=NULL
@@ -222,6 +325,71 @@ generate_inits_misID<-function(DM.hab.pois,DM.hab.bern,DM.det,N.hab.pois.par,N.h
            tau.eta.pois=runif(n.species,0.5,2),tau.eta.bern=tau.eta.bern,tau.nu=runif(n.species,0.5,2),MisID=MisID)
   Par$hab.pois[,1]=log(apply(G.transect,1,'mean')/(mean(Area.trans)*mean(Area.hab))*exp(rnorm(n.species,0,1)))
   Par$G=round(exp(Par$Nu)*Area.hab*exp(rnorm(length(Par$Nu))))
+  for(isp in 1:n.species)Par$N[isp,]=Par$G[isp,]+rpois(n.cells,grp.mean[isp]*Par$G[isp,])
+  if(spat.ind==1){
+    Par$Eta.bern=0*Par$Eta.bern
+    Par$Eta.pois=0*Par$Eta.pois
+  }
+  Par
+}
+
+#' generate initial values for misID model if not already specified by user
+#' @param DM.hab.pois 	a list of design matrices for the Poisson habitat model (elements are named sp1,sp2, etc.)
+#' @param DM.hab.bern   If a hurdle model, a list of design matrices for the Bernoulli habitat model (elements are named sp1,sp2, etc.) (NULL if not hurdle)
+#' @param DM.det	design matrix for detection model
+#' @param N.hab.pois.par  vector giving number of parameters in the Poisson habitat model for each species
+#' @param N.hab.bern.par  vector giving number of parameters in the Bernoulli habitat model for each species (NULL if not hurdle)
+#' @param G.transect a matrix of the number of groups of animals in area covered by each transect; each row gives a separate species		
+#' @param Area.trans	a vector giving the proportion of a strata covered by each transect
+#' @param Area.hab	a vector of the relative areas of each strata
+#' @param Mapping	a vector mapping each transect to it's associated strata
+#' @param point.ind	is point independence assumed (TRUE/FALSE)
+#' @param spat.ind  is spatial independence assumed? (TRUE/FALSE)
+#' @param grp.mean  a vector giving the pois1 parameter for group size (one entry for each species)
+#' @param misID    if TRUE, indicates that misidentification is incorporated into modeling
+#' @param misID.mat a matrix specifying which elements of the misID matrix are linked to model equations
+#' @param N.par.misID a vector giving the number of parameters for each misID model (in multinomial logit space)
+#' @return a list of initial parameter values
+#' @export
+#' @keywords initial values, mcmc
+#' @author Paul B. Conn
+generate_inits_move<-function(DM.hab.pois,DM.hab.bern,DM.det,N.hab.pois.par,N.hab.bern.par,G.transect,Area.trans,Area.hab,Mapping,point.ind,spat.ind,grp.mean,misID,misID.mat,N.par.misID,n.par.move,n.par.measure){		
+  i.hurdle=1-is.null(DM.hab.bern)
+  n.species=nrow(G.transect)
+  n.cells=length(Area.hab)
+  if(misID){
+    n.misID.eq=max(misID.mat)
+    MisID=vector("list",n.misID.eq)
+    for(itmp in 1:n.misID.eq)MisID[[itmp]]=runif(N.par.misID[itmp],-.5,.5)
+    diag.mods=diag(misID.mat)
+    diag.mods=diag.mods[which(diag.mods>0)]
+    if(length(diag.mods)>0){
+      for(itmp in 1:length(diag.mods))MisID[[diag.mods[itmp]]][1]=MisID[[diag.mods[itmp]]][1]+2 #ensure that the highest probability is for a non-misID
+    }
+  }
+  else MisID=NULL
+  hab.pois=matrix(0,n.species,max(N.hab.pois.par))
+  hab.bern=NULL
+  tau.eta.bern=NULL
+  Eta.bern=NULL
+  if(i.hurdle==1){
+    hab.bern=matrix(0,n.species,max(N.hab.bern.par))
+    tau.eta.bern=runif(n.species,0.5,2)
+    Eta.bern=matrix(rnorm(n.species*n.cells),n.species,n.cells)
+  }
+  Nu=matrix(0,n.species,n.cells)
+  for(isp in 1:n.species){
+    Nu[isp,]=log(max(G.transect[isp,])/mean(Area.trans)*exp(rnorm(length(Area.hab),0,0.1)))
+  }
+  Par=list(det=rnorm(ncol(DM.det),0,1),hab.pois=hab.pois,hab.bern=hab.bern,cor=ifelse(point.ind,runif(1,0,.8),0),
+           Nu=Nu,Eta.pois=matrix(rnorm(n.species*n.cells),n.species,n.cells),Eta.bern=Eta.bern,
+           tau.eta.pois=runif(n.species,0.5,2),tau.eta.bern=tau.eta.bern,tau.nu=runif(n.species,0.5,2),MisID=MisID)
+  Par$hab.pois[,1]=log(apply(G.transect,1,'mean')/(mean(Area.trans)*mean(Area.hab))*exp(rnorm(n.species,0,1)))
+  Par$G=round(exp(Par$Nu)*Area.hab*exp(rnorm(length(Par$Nu))))
+  Par$beta.move = rep(1,n.par.move)
+  if(n.par.move>1)Par$beta.move[2:n.par.move]=rnorm(n.par.move-1,0,0.1)
+  Par$beta.measure = rep(1,n.par.measure)
+  if(n.par.measure>1)Par$beta.measure[2:n.par.measure]=rnorm(n.par.measure-1,0,0.1)
   for(isp in 1:n.species)Par$N[isp,]=Par$G[isp,]+rpois(n.cells,grp.mean[isp]*Par$G[isp,])
   if(spat.ind==1){
     Par$Eta.bern=0*Par$Eta.bern
@@ -670,18 +838,7 @@ summary_N<-function(Out){
 #' The vectors of covariate values can be of different lengths because expand.grid is used to create a
 #' dataframe of all unique combinations of the distances and covariate values and the detection and related
 #' values are computed for each combination.  The covariate vector observer=1:2 is automatically included.
-#'
-#' @param x vector of perpendicular distances
-#' @param formula linear probit formula for detection using distance and other covariates
-#' @param beta parameter values
-#' @param rho maximum correlation at largest distance
-#' @param ... any number of named vectors of covariates used in the formula
-#' @return dat dataframe with distance, observer, any covariates specified in ... and detection probability p,
-#' conditional detection probability pc, dupiicate detection dup, pooled detection pool and
-#' dependence pc/p=delta.
-#' @export
-#' @author Jeff Laake
-#' @examples
+#' The folowing is too long for the examples section:
 #' test=probit.fct(0:10,~distance,c(1,-.15),.8,size=1:3)
 #' par(mfrow=c(1,2))
 #' with(test[test$observer==1,],
@@ -692,6 +849,16 @@ summary_N<-function(Out){
 #' legend(1,.2,legend=c("Detection","Conditional detection","Duplicate detection","Pooled detection"),pch=1:4,bty="n")
 #' plot(distance,delta,xlab="Distance",ylab="Dependence")
 #' })
+#' @param x vector of perpendicular distances
+#' @param formula linear probit formula for detection using distance and other covariates
+#' @param beta parameter values
+#' @param rho maximum correlation at largest distance
+#' @param ... any number of named vectors of covariates used in the formula
+#' @return dat dataframe with distance, observer, any covariates specified in ... and detection probability p,
+#' conditional detection probability pc, dupiicate detection dup, pooled detection pool and
+#' dependence pc/p=delta.
+#' @export
+#' @author Jeff Laake
 probit.fct=function(x,formula,beta,rho,...)
 {
   #require(mvtnorm)
@@ -888,6 +1055,15 @@ post_loss<-function(Out,burnin=0){
   Loss
 }
 
+#' function to plot a map of abundance.  this was developed for spatio-temporal models in mind
+#' @param cur.t time step to plot
+#' @param N A vector of values to plot (e.g. abundance) 
+#' @param Grid A list of SpatialPolygonsDataFrame (one for each time step) - holding survey unit spatial information 
+#' @param highlight If provided, the rows of Grid[[cur.t]] to specially highlight
+#' @return A ggplot2 object
+#' @export
+#' @keywords Abundance map
+#' @author Paul B. Conn
 plot_N_map<-function(cur.t,N,Grid,highlight=NULL){
   #require(rgeos)
   Tmp=Grid[[1]]

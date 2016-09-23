@@ -1,4 +1,5 @@
-#' Primary function for hierarchical, areal analysis of distance sampling data (without movement).  This function
+#' Function for hierarchical, areal analysis of distance sampling data with movement and measurement error.  Currently implemented
+#' for binned distance data only. This function
 #' pre-processes data and calls other functions to perform the analysis, and is the only function
 #' the user needs to call themselves. 
 #'
@@ -16,8 +17,9 @@
 #' @param Area.hab   A vector giving the area of each geographical strata (default is equal area)
 #' @param Mapping  A vector giving the habitat cell id number for each transect
 #' @param Area.trans	A vector giving the effective area covered by each transect as fraction of total area in the strata it is located
-#' @param Observers	A (2 x number of transects) matrix giving the observers IDs that were present for each transect (the 2nd row is to contain NAs if only 1 observer was present)
-#' @param Bin.length	If distances are binned, this vector gives the relative length of each distance bin (vector must sum to one) 
+#' @param Observers	A (2 x number of transects) matrix giving the observers IDs that were present for each transect (the 2nd row is to contain NAs if only 1 observer was present); the 
+#' @param Bin.length	This vector gives the relative length of each distance bin (vector must sum to one) 
+#' @param Obs.bins A vector giving the bins that are observed (e.g., c(2,3,4,5,6))
 #' @param n.obs.cov	Number of observer covariates (e.g., seat position, visibility, etc.)
 #' @param Hab.cov	A data.frame object giving covariates thought to influence abundance intensity at strata level; column names index individual covariates
 #' @param Obs.cov  A (max # of observers X # of transects X # of observer covariates) size array giving observer covariate values for each transect flown
@@ -26,8 +28,15 @@
 #' @param detect If TRUE (the default), detectability is estimated; if FALSE, assumes detection probability is 1.0 (i.e. a strip transect with perfect detection).  
 #' @param Det.formula  A formula giving the model for detection probability (e.g. ~Distance+Group+Visibility+Observer). Note that
 #'				there are several "reserved" variable names.  "Distance", "Observer", "Species", and "Group" are reserved variable names.
+#' @param move.formula A formula specifying relationship between movement rate (or movement kernel SD) and potential covariates (note, 'Dist.true' is reserved)
+#' @param measure.formula A formula specifying relationship between measurement error rate (or error kernel SD) and potential covariates (e.g., 'Dist.true')
+#' @param move.family A family for modeling the movement kernel.  Current choices are "gaussian" or "laplace" (double exponential)
+#' @param measure.family A family for modeling the measurement error kernel.  Current choices are "gaussian" or "laplace" (double exponential)
+#' @param move.one.side  If TRUE (default), movement can only be away from the transect line
+#' @param move.cov If provided (default is NULL) provides the name of the column in Dat corresponding to a binary individual covariate influencing whether individuals can move (cov=1) or not (cov=0)
+#' @param first.obs.correct If TRUE (FALSE is default), measurement error for the observer in the front seat is assumed zero (the variable "Seat" must be definied in Obs.cov and then observations w Seat==1 will have measurement error set to zero)
 #' @param Cov.prior.pdf	If individual covariates are provided, this character matrix gives the form of the prior pdfs for each covariate
-#'		  current possibilities are "poisson", "pois1","poisson_ln","pois1_ln",uniform.disc","multinom","uniform.cont", or "normal".
+#'		  current possibilities are "poisson", "pois1","poisson_ln","pois1_ln",uniform.disc","binary","multinom","uniform.cont", or "normal".
 #'		  "pois1" is 1+x where x~poisson; "poisson_ln" and "pois1_ln" are lognormal poisson models that incorporate overdispersion.  Note
 #'        the dimension of this matrix are (# species X # of covariates)
 #' @param Cov.prior.parms	A (s X k X n) array where s is the number of species, n is the number of individual covariates (other than distance), and
@@ -42,7 +51,6 @@
 #' 		For the multinomial pdf, prior parameters of the dirichlet distribution must be specified if Cov.prior.fixed=1.
 #' @param Cov.prior.fixed  An indicator matrix specifying which (if any) individual covariate distributions should be fixed during estimation
 #' @param Cov.prior.n  An (# species X # indiv. covariates) matrix giving the number of parameters in each covariate pdf
-#' @param pol.eff 	For continuous distance, which polynomial degrees to model (default is c(1:2); an intercept is always estimated when "Distance" is listed in "Det.formula")
 #' @param ZIP  If TRUE, estimate ZIP model for abundance that includes a Bernoulli model for zeros and a Poisson + 1 model for positive values (default is FALSE)
 #' @param point.ind  Estimate a correlation parameter for detection probability that's an increasing function of distance?
 #' @param spat.ind	If TRUE, assumes spatial independence (no spatial random effects on abundance intensity) default is FALSE
@@ -51,10 +59,6 @@
 #' @param fix.tau.nu  If TRUE, fixes tau.nu during estimation (the value to fix it to can be provided in "Inits")
 #' @param srr  If TRUE, uses spatially retricted regression, where smoothing occurs on residuals and all spatial effects are orthogonal to the linear predictors (by default, analysis is limited to the highest 50 eigenvalues of the decomposition of the residual projection matrix to reduce computing time)
 #' @param srr.tol Threshold eigenvalue level for SRR; only eigenvectors with higher eigenvalues than srr.tol are included in SRR formulation (default is 0.5)
-#' @param misID If TRUE, updates species for observed animals and estimates misID parameters
-#' @param misID.mat With true state on rows and assigned state on column, each positive entry provides an index to misID.models (i.e. what model to assume on multinomial logit space); a 0 indicates an impossible assigment; a negative number designates which column is to be obtained via subtraction
-#' @param misID.models A formula vector providing linear model-type formulas for each positive value of misID.mat.  
-#' @param misID.symm If TRUE, the constraint pi^{i|j}=pi^{j|i} is implemented; in this case, entries for pi^{j|i} are all assumed to be given a '-1' in misID.mat
 #' @param grps 	If FALSE, detections are assumed to all be of individual animals
 #' @param M		Matrix with species-specific rows giving maximum possible value for number of groups present in each transect (in practice just set high enough that values at M and above are never sampled during MCMC) and can be fine tuned as needed
 #' @param Control	A list object including the following objects:
@@ -69,6 +73,8 @@
 #' @param Inits	An (optional) list object providing initial values for model parameters, with the following objects:
 #'  "hab.pois": Initial values for habitat linear predictor parameters for poisson model;
 #'  "hab.bern": If ZIP=TRUE, initial values for habitat linear predictor parameters for bernoulli zero model;
+#'  "beta.move": Initial value(s) for regression parameters for movement parameter(s)
+#'  "beta.measure": Initial value(s) for regression parameters for detection measurement error
 #'	"det": Initial values for detection model (includes distance, observer, env. variables, and individual covariates);
 #'	"cor.par": If point.ind==TRUE, this is an initial value for the correlation parameter (which must be in (0,1));	
 #'	"Nu": Gives log(lambda) for each spatial strata;
@@ -95,7 +101,7 @@
 #' @keywords areal model, data augmentation, distance sampling, mcmc, reversible jump
 #' @author Paul B. Conn \email{paul.conn@@noaa.gov} 
 #' @examples print("example analysis included in the script example_analysis.R")
-hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.length,Hab.cov,Obs.cov,Hab.pois.formula,Hab.bern.formula=NULL,Det.formula,detect=TRUE,Cov.prior.pdf,Cov.prior.parms,Cov.prior.fixed,Cov.prior.n,n.obs.cov=0,pol.eff=c(1:2),ZIP=FALSE,point.ind=TRUE,spat.ind=FALSE,last.ind=FALSE,cor.const=FALSE,fix.tau.nu=FALSE,srr=TRUE,srr.tol=0.5,misID=FALSE,misID.models=NULL,misID.mat=NULL,misID.symm=TRUE,Inits=NULL,grps=FALSE,M,Control,adapt=TRUE,Prior.pars,post.loss=TRUE){
+hierarchical_DS_move<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.length,Obs.bins,Hab.cov,Obs.cov,Hab.pois.formula,Hab.bern.formula=NULL,move.formula=NULL,measure.formula=NULL,move.family="laplace",measure.family="laplace",move.one.side=TRUE,move.cov=NULL,first.obs.correct=FALSE,Det.formula,detect=TRUE,Cov.prior.pdf,Cov.prior.parms,Cov.prior.fixed,Cov.prior.n,n.obs.cov=0,pol.eff=c(1:2),ZIP=FALSE,point.ind=TRUE,spat.ind=FALSE,last.ind=FALSE,cor.const=FALSE,fix.tau.nu=FALSE,srr=TRUE,srr.tol=0.5,misID=FALSE,misID.models=NULL,misID.mat=NULL,misID.symm=TRUE,Inits=NULL,grps=FALSE,M,Control,adapt=TRUE,Prior.pars,post.loss=TRUE){
 	#require(mvtnorm)
 	#require(Matrix)
 	#require(truncnorm)
@@ -103,7 +109,8 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 	#require(MCMCpack)
 	DEBUG=FALSE
 	
-	Adj=as.matrix(Adj)  #just in case the adjacency matrix = 1 (for 1 transect)
+	if(spat.ind==TRUE)Adj=NULL
+	if(spat.ind==FALSE)Adj=as.matrix(Adj)  #just in case the adjacency matrix = 1 (for 1 transect)
 	S=length(Area.hab)
 	n.transects=length(Area.trans)
 	n.ind.cov=ncol(Dat)-(6+n.obs.cov) #number of individual covariates 
@@ -124,7 +131,13 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
   if(ZIP==TRUE & is.null(Hab.bern.formula))cat("\n ERROR: must specify Hab.bern.formula when ZIP=TRUE \n")
   if(n.species!=length(Hab.pois.formula))cat("\n ERROR: make sure length of Hab.pois.formula list equal to the number of species \n")
   if(grps==TRUE & Cov.prior.pdf[1,1]!='pois1' & Cov.prior.pdf[1,1]!='pois1_ln')cat("\n ERROR: Cov.prior.pdf for group size needs to be zero truncated (pois1 or pois1_ln)")
-  #More later...	
+  if(class(Dat)=="matrix")cat("\n ERROR: Dat must be a data.frame, not a matrix \n")
+  if(sum(as.numeric(Dat[,"Distance"])%%1,na.rm=TRUE)!=0)cat("\n ERROR: movement/measurement error not yet implemented for continuous distances")
+  if(last.ind)cat("ERROR: movement model not properly implemented for last.ind=TRUE")
+	if(is.null(move.cov)==FALSE){
+	  if(sum(!(Dat[,move.cov]%in%c(0,1)))!=0)cat("ERROR: only binary values can be provided for move.cov")
+	}
+			  #More later...	
   
   #adust M to be divisible by 2
   M[which(M%%2==1)]=M[which(M%%2==1)]+1
@@ -136,16 +149,14 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 	if(grps==TRUE)cur.colnames[7+n.obs.cov]="Group"
 	if(length(colnames(Dat))!=length(cur.colnames))cat("\n ERROR: mismatch between dimension of Dat and expected columns: check to make sure n.obs.cov, etc. correct")
 	colnames(Dat)=cur.colnames
-	i.binned=0
+	i.binned=1
 	n.bins=NULL
-	if(is.factor(Dat[1,"Distance"])==1 | sum(as.numeric(Dat[,"Distance"])%%1)==0){
-		i.binned=1
-		n.bins=length(unique(Dat[,"Distance"]))
-    Dat[,"Distance"]=as.factor(Dat[,"Distance"])
-	}
-  
-  if(i.binned==1)if(length(Bin.length)!=n.bins)cat("\n ERROR: length of Bin.length must equal n.bins")
-
+	#if(is.factor(Dat[1,"Distance"])==1 | sum(as.numeric(Dat[,"Distance"])%%1,na.rm=TRUE)==0){
+	#	i.binned=1
+	n.obs.bins=length(unique(Dat[,"Distance"]))
+  #  Dat[,"Distance"]=as.factor(Dat[,"Distance"])
+	#}
+  n.bins=length(Bin.length)
 
 	Dat[Dat[,"Obs"]==0,"Species"]=Dat[Dat[,"Obs"]==1,"Species"][1]  #just set missing species to the first 'real' species
   Dat[,"Species"]=as.factor(as.character(Dat[,"Species"]))  #reestablish levels
@@ -206,9 +217,9 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 	
 	if(DEBUG==TRUE)True.sp=Out$True.species #for debugging
 	Dat.num=cbind(Dat.num[1:5],True.sp,Dat.num[6:ncol(Dat.num)])
-	
+
 	#Initialize data augmentation multi-d array ("Data"), parameter vectors and matrices
-	Data<-array(0,dim=c(n.species,n.transects,max.M,5+n.obs.cov+n.ind.cov)) #array cols are Obs ID,Y,Obs species, True species,Obs covariates,Distance,Ind covariates
+	Data<-array(0,dim=c(n.species,n.transects,max.M,6+n.obs.cov+n.ind.cov)) #array cols are Obs ID,Y,Obs species, True species,Obs covariates,Obs Distance,True distance,Ind covariates
 	G.transect=matrix(0,n.species,n.transects)  #number of groups by transect; each row gives results for separate species
 	n.Records=G.transect #number of records by transect (=G.transect*n.Observers)
 	N.transect=G.transect #total abundance by transect
@@ -218,18 +229,26 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 			cur.gt0=sum(Dat.num[,"Transect"]==itrans & Dat.num[,"True.sp"]==isp)
 			if(cur.gt0>0){
 				Cur.dat=Dat.num[which(Dat.num[,"Transect"]==itrans & Dat.num[,"True.sp"]==isp),3:ncol(Dat.num)]
+				#print(head(Cur.dat))
 				Data[isp,itrans,1:nrow(Cur.dat),1:(3+n.obs.cov)]=as.matrix(Cur.dat[,1:(3+n.obs.cov)])
 				Data[isp,itrans,1:nrow(Cur.dat),5+n.obs.cov]=as.matrix(Cur.dat[,"Distance"])
+				if(n.obs.cov>0)Data[isp,itrans,1:nrow(Cur.dat),5:(4+n.obs.cov)]=as.matrix(Cur.dat[,5:(4+n.obs.cov)])
 				#fill distances for unobserved
+				for(irec in 1:cur.gt0){  #fill in NA observed distances when one observer sees them and the other doesn't
+				  if(is.na(Data[isp,itrans,irec,5+n.obs.cov]) & irec%%2==0)Data[isp,itrans,irec,5+n.obs.cov]=Data[isp,itrans,irec-1,5+n.obs.cov]
+				  if(is.na(Data[isp,itrans,irec,5+n.obs.cov]) & irec%%2==1)Data[isp,itrans,irec,5+n.obs.cov]=Data[isp,itrans,irec+1,5+n.obs.cov]
+				}
 			  if((M[isp,itrans]-nrow(Cur.dat))<=0)cat(paste("Error: M dimension for species ",isp," transect ",itrans," too small; Increase M \n"))
 				if(i.binned==1)Data[isp,itrans,(nrow(Cur.dat)+1):M[isp,itrans],5+n.obs.cov]=rep(sample(c(1:n.bins),size=(M[isp,itrans]-nrow(Cur.dat))/n.Observers[itrans],replace=TRUE,prob=Bin.length),each=n.Observers[itrans])
 				else Data[isp,itrans,(nrow(Cur.dat)+1):M[isp,itrans],5+n.obs.cov]=rep(runif((M[isp,itrans]-nrow(Cur.dat))/n.Observers[itrans]),each=n.Observers[itrans])
+        #  copy over observed distances as initial values for true distances
+				Data[isp,itrans,1:max.M,6+n.obs.cov]=Data[isp,itrans,1:max.M,5+n.obs.cov]
 				#fill individual covariate values for (potential) animals that weren't observed
 				if(n.ind.cov>0){
-					Data[isp,itrans,1:nrow(Cur.dat),(6+n.obs.cov):(6+n.obs.cov+n.ind.cov-1)]=as.matrix(Cur.dat[,(6+n.obs.cov):(6+n.obs.cov+n.ind.cov-1)])
+					Data[isp,itrans,1:nrow(Cur.dat),(7+n.obs.cov):(7+n.obs.cov+n.ind.cov-1)]=as.matrix(Cur.dat[,(6+n.obs.cov):(6+n.obs.cov+n.ind.cov-1)])
 					for(icov in 1:n.ind.cov){
 						rsamp=switch_sample(n=(M[isp,itrans]-nrow(Cur.dat))/n.Observers[itrans],pdf=Cov.prior.pdf[isp,icov],cur.par=Cov.prior.parms[isp,1:Cov.prior.n[isp,icov],icov],RE=0) 
-						Data[isp,itrans,(nrow(Cur.dat)+1):M[isp,itrans],5+n.obs.cov+icov]=rep(rsamp,each=n.Observers[itrans])
+						Data[isp,itrans,(nrow(Cur.dat)+1):M[isp,itrans],6+n.obs.cov+icov]=rep(rsamp,each=n.Observers[itrans])
 					}
 				}
 				n.Records[isp,itrans]=nrow(Cur.dat)
@@ -240,12 +259,15 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 				else N.transect[isp,itrans]=sum(Cur.dat[,"Group"])/n.Observers[itrans]
 			}
 			else{
-				if(i.binned==1)Data[isp,itrans,1:M[isp,itrans],5+n.obs.cov]=rep(sample(c(1:n.bins),size=M[isp,itrans]/n.Observers[itrans],replace=TRUE,prob=Bin.length),each=n.Observers[itrans])
+				if(i.binned==1){
+				  Data[isp,itrans,1:M[isp,itrans],5+n.obs.cov]=rep(sample(c(1:n.bins),size=M[isp,itrans]/n.Observers[itrans],replace=TRUE,prob=Bin.length),each=n.Observers[itrans])
+				  Data[isp,itrans,1:M[isp,itrans],6+n.obs.cov]=Data[isp,itrans,1:M[isp,itrans],5+n.obs.cov]
+				}
 				else Data[isp,itrans,1:M[isp,itrans],5+n.obs.cov]=rep(runif(M[isp,itrans]/n.Observers[itrans]),each=n.Observers[itrans])
 				if(n.ind.cov>0){
 					for(icov in 1:n.ind.cov){
 						rsamp=switch_sample(n=M[isp,itrans]/n.Observers[itrans],pdf=Cov.prior.pdf[isp,icov],cur.par=Cov.prior.parms[isp,1:Cov.prior.n[isp,icov],icov],RE=0)
-						Data[isp,itrans,1:M[isp,itrans],5+n.obs.cov+icov]=rep(rsamp,each=n.Observers[itrans])
+						Data[isp,itrans,1:M[isp,itrans],6+n.obs.cov+icov]=rep(rsamp,each=n.Observers[itrans])
 					}
 				}
 				#fill species
@@ -293,10 +315,12 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 	#set all 'true species' values = to defining entry in species array
  	for(isp in 1:n.species){
 		Data[isp,,,4]=isp
-	}
-
-	stacked.names=c(colnames(Dat)[3:4],"Obs.species","Species",colnames(Dat)[6:ncol(Dat)])
-	Stacked=stack_data(Data[1,,,],G.transect[1,]*n.Observers,n.transects,stacked.names,factor.ind) #a stacked form of detection data for updating beta parameters
+ 	}
+	
+	stacked.names=c(colnames(Dat)[3:4],"Obs.species","Species")
+	if(n.obs.cov>0)stacked.names=c(stacked.names,colnames(Dat)[6:(5+n.obs.cov)],"Distance","Dist.true")
+  if(n.ind.cov>0)stacked.names=c(stacked.names,colnames(Dat)[(7+n.obs.cov):(6+n.obs.cov+n.ind.cov)])
+		Stacked=stack_data(Data[1,,,],G.transect[1,]*n.Observers,n.transects,stacked.names,factor.ind) #a stacked form of detection data for updating beta parameters
 	if(n.species>1)for(isp in 2:n.species)Stacked=rbind(Stacked,stack_data(Data[isp,,,],G.transect[isp,]*n.Observers,n.transects,stacked.names,factor.ind))
 
 	#determine levels for each factor variable to help in assembling compatible DMs for smaller datasets 
@@ -357,9 +381,16 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 	    }
 	  }
 	}	  
+  DM.det=get_mod_matrix_det_move(Cur.dat=Stacked,stacked.names,factor.ind,Det.formula,Levels,Obs.bins,n.bins)
   
-  DM.det=get_mod_matrix(Cur.dat=Stacked,stacked.names,factor.ind,Det.formula,Levels)
-	
+  move.cov.pl=NULL
+  seat.pl=NULL
+  if(is.null(move.cov)==FALSE)move.cov.pl=which(stacked.names==move.cov)
+  if(first_obs_correct)seat.pl=which(stacked.names=="Seat")
+  DM.move = get_mod_matrix_move(Cur.dat=Stacked,stacked.names,factor.ind,move.formula,Levels)
+  DM.measure = get_mod_matrix_move(Cur.dat=Stacked,stacked.names,factor.ind,measure.formula,Levels)
+  
+
 	#now, deal with misID parameters
 	N.par.misID=NULL
 	if(misID==TRUE){
@@ -369,14 +400,15 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 		}
 	}
 
-	Par=generate_inits_misID(DM.hab.pois=DM.hab.pois,DM.hab.bern=DM.hab.bern,DM.det=DM.det,N.hab.pois.par=N.hab.pois.par,N.hab.bern.par=N.hab.bern.par,G.transect=G.transect,Area.trans=Area.trans,Area.hab=Area.hab,Mapping=Mapping,point.ind=point.ind,spat.ind=spat.ind,grp.mean=Cov.prior.parms[,1,1],misID=misID,misID.mat=misID.mat,N.par.misID=N.par.misID)	
+	n.par.move=ncol(DM.move)
+	n.par.measure=ncol(DM.measure)
+	Par=generate_inits_move(DM.hab.pois=DM.hab.pois,DM.hab.bern=DM.hab.bern,DM.det=DM.det,N.hab.pois.par=N.hab.pois.par,N.hab.bern.par=N.hab.bern.par,G.transect=G.transect,Area.trans=Area.trans,Area.hab=Area.hab,Mapping=Mapping,point.ind=point.ind,spat.ind=spat.ind,grp.mean=Cov.prior.parms[,1,1],misID=misID,misID.mat=misID.mat,N.par.misID=N.par.misID,n.par.move=n.par.move,n.par.measure=n.par.measure)	
 	if(is.null(Inits)==FALSE){  #replace random inits with user provided inits for all parameters specified
 		I.init=names(Inits)
 		for(ipar in 1:length(I.init)){
 			eval(parse(text=paste("Par$",names(Inits)[ipar],"=Inits$",names(Inits[ipar]))))
 		}
 	}
-  if(point.ind==TRUE)Par$cor=0
 	#start Nu out at a compatible level
     for(isp in 1:n.species)Par$Nu[isp,]=DM.hab.pois[[isp]]%*%Par$hab.pois[isp,1:N.hab.pois.par[isp]]
   if(length(Par$tau.nu)!=n.species)cat('Error: length of initial value vector for tau.nu should be equal to # of species')
@@ -405,17 +437,21 @@ hierarchical_DS<-function(Dat,Adj,Area.hab=1,Mapping,Area.trans,Observers,Bin.le
 		}
 	}
 	
-	Q=-Adj
-	diag(Q)=apply(Adj,2,'sum')
-	Q=Matrix(Q)	
+	Q=NULL
+	if(spat.ind==FALSE){
+	  Q=-Adj
+	  diag(Q)=apply(Adj,2,'sum')
+	  Q=Matrix(Q)	
+	}
 
 	Meta=list(n.transects=n.transects,n.species=n.species,S=S,spat.ind=spat.ind,Area.hab=Area.hab,Area.trans=Area.trans,
 			Adj=Adj,Mapping=Mapping,Covered.area=Covered.area,n.Observers=n.Observers,M=M,stacked.names=stacked.names,
 			factor.ind=factor.ind,Det.formula=Det.formula,detect=detect,Levels=Levels,i.binned=i.binned,dist.pl=dist.pl,
-			G.transect=G.transect,N.transect=N.transect,grps=grps,n.bins=n.bins,Bin.length=Bin.length,n.ind.cov=n.ind.cov,
+			G.transect=G.transect,N.transect=N.transect,grps=grps,Obs.bins=Obs.bins,n.obs.bins=n.obs.bins,n.bins=n.bins,Bin.length=Bin.length,n.ind.cov=n.ind.cov,
 			Cov.prior.pdf=Cov.prior.pdf,Cov.prior.parms=Cov.prior.parms,Cov.prior.fixed=Cov.prior.fixed,Cov.prior.n=Cov.prior.n,ZIP=ZIP,point.ind=point.ind,last.ind=last.ind,cor.const=cor.const,fix.tau.nu=fix.tau.nu,
-			srr=srr,srr.tol=srr.tol,misID=misID,misID.models=misID.models,misID.mat=misID.mat,misID.symm=misID.symm,N.par.misID=N.par.misID,N.hab.pois.par=N.hab.pois.par,N.hab.bern.par=N.hab.bern.par,post.loss=post.loss)
-	
+			srr=srr,srr.tol=srr.tol,misID=misID,misID.models=misID.models,misID.mat=misID.mat,misID.symm=misID.symm,N.par.misID=N.par.misID,N.hab.pois.par=N.hab.pois.par,N.hab.bern.par=N.hab.bern.par,post.loss=post.loss,
+			move.formula=move.formula,measure.formula=measure.formula,move.family=move.family,measure.family=measure.family,move.one.side=move.one.side,move.cov=move.cov,first.obs.correct=first.obs.correct)
+
 	if(adapt==TRUE){
 		cat('\n Beginning adapt phase \n')
 		Out=mcmc_ds(Par=Par,Data=Data,cur.iter=Control$adapt,adapt=1,Control=Control,DM.hab.pois=DM.hab.pois,DM.hab.bern=DM.hab.bern,DM.det=DM.det,Q=Q,Prior.pars=Prior.pars,Meta=Meta)

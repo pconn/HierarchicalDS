@@ -1,8 +1,8 @@
 Package: hierarchicalDS
 Maintainer: Paul B Conn <paul.conn@noaa.gov>
 License: Unlimited
-Title: Functions for performing hierarchical analysis of distance
-    sampling data
+Title: Functions For Performing Hierarchical Analysis of Distance
+    Sampling Data
 Type: Package
 LazyLoad: yes
 Author: P.B. Conn \email{paul.conn@@noaa.gov}
@@ -22,7 +22,7 @@ Description: Functions for performing hierarchical analysis of distance
     from double observers.  New in version 2.1 is the ability to
     include zero inflation, but this is only recommended for cases where
     sample sizes and spatial coverage of the survey are high.
-Version: 2.093
+Version: 2.9
 Imports:
     truncnorm,
     mvtnorm,
@@ -32,9 +32,4 @@ Imports:
     mc2d,
     ggplot2,
     rgeos
-Date: 2014-11-24
-Collate:
-    'hierarchical_DS.R'
-    'mcmc_ds.R'
-    'simulate_data.R'
-    'spat_funcs.R'
+Date: 2014-11-25
